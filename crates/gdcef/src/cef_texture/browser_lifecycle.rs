@@ -72,6 +72,8 @@ impl CefTexture {
             popup_policy: self.popup_policy,
             preload_script: self.preload_script.to_string(),
             preload_script_path: self.preload_script_path.to_string(),
+            enable_audio_capture: self.enable_audio_capture,
+            browser_context_id: self.browser_context_id.to_string(),
             software_target_texture: None,
             log_prefix: "CefTexture",
         };

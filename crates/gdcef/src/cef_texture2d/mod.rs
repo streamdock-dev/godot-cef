@@ -40,6 +40,8 @@ pub(crate) struct RuntimeCreateConfig {
     popup_policy: i32,
     preload_script: GString,
     preload_script_path: GString,
+    enable_audio_capture: bool,
+    browser_context_id: GString,
     software_target_texture: Option<Gd<ImageTexture>>,
     log_prefix: &'static str,
 }
@@ -88,6 +90,20 @@ pub struct CefTexture2D {
     preload_script_path: GString,
 
     #[export]
+    #[var(
+        get = get_enable_audio_capture,
+        set = set_enable_audio_capture
+    )]
+    enable_audio_capture: bool,
+
+    #[export]
+    #[var(
+        get = get_browser_context_id,
+        set = set_browser_context_id
+    )]
+    browser_context_id: GString,
+
+    #[export]
     #[var(get = get_texture_size_property, set = set_texture_size_property)]
     texture_size: Vector2i,
 
@@ -129,6 +145,8 @@ impl ITexture2D for CefTexture2D {
             popup_policy: crate::browser::popup_policy::BLOCK,
             preload_script: GString::new(),
             preload_script_path: GString::new(),
+            enable_audio_capture: crate::settings::is_audio_capture_enabled(),
+            browser_context_id: GString::new(),
             texture_size,
             last_find_query: GString::new(),
             last_find_match_case: false,

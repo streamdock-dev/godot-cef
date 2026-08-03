@@ -61,6 +61,25 @@ pub struct CefTexture {
     /// Godot file path containing JavaScript to inject as a preload script.
     preload_script_path: GString,
 
+    #[export]
+    #[var(get = get_enable_audio_capture, set = set_enable_audio_capture)]
+    /// Per-instance override for audio capture mode. When true, this browser's audio is
+    /// redirected into an internal buffer for Godot to consume (via `create_audio_stream`/
+    /// `push_audio_to_playback`) instead of playing directly through the system's default
+    /// output ("Direct Playback"). Defaults to the `godot_cef/audio/enable_audio_capture`
+    /// project setting at creation time, but can be overridden per instance.
+    enable_audio_capture: bool,
+
+    #[export]
+    #[var(get = get_browser_context_id, set = set_browser_context_id)]
+    /// Per-instance browser profile identifier. When non-empty, this browser gets its own
+    /// isolated cookie jar/cache/local storage instead of sharing the addon's single global
+    /// profile. Two `CefTexture`/`CefTexture2D` instances with the same non-empty id share
+    /// one profile; different ids (or the default, empty) never share cookies with each
+    /// other. Must be set before the browser is created -- changing it after the browser
+    /// already exists has no effect until the node is recreated.
+    browser_context_id: GString,
+
     #[var]
     /// Stores the IME cursor position in local coordinates (relative to this `CefTexture` node),
     /// automatically updated from the browser's caret position.
@@ -107,6 +126,8 @@ impl ITextureRect for CefTexture {
             popup_policy: crate::browser::popup_policy::BLOCK,
             preload_script: GString::new(),
             preload_script_path: GString::new(),
+            enable_audio_capture: crate::settings::is_audio_capture_enabled(),
+            browser_context_id: GString::new(),
             ime_position: Vector2i::new(0, 0),
             texture2d_helper,
             last_size: Vector2::ZERO,
@@ -446,6 +467,30 @@ impl CefTexture {
     }
 
     #[func]
+    fn get_enable_audio_capture(&self) -> bool {
+        self.enable_audio_capture
+    }
+
+    #[func]
+    fn set_enable_audio_capture(&mut self, enabled: bool) {
+        self.enable_audio_capture = enabled;
+        self.texture2d_helper
+            .bind_mut()
+            .set_enable_audio_capture(enabled);
+    }
+
+    #[func]
+    fn get_browser_context_id(&self) -> GString {
+        self.browser_context_id.clone()
+    }
+
+    #[func]
+    fn set_browser_context_id(&mut self, id: GString) {
+        self.browser_context_id = id.clone();
+        self.texture2d_helper.bind_mut().set_browser_context_id(id);
+    }
+
+    #[func]
     /// Navigates back in the browser history.
     pub fn go_back(&mut self) {
         self.texture2d_helper.bind_mut().go_back();
@@ -682,10 +727,12 @@ impl CefTexture {
         })
     }
 
-    /// Returns true if audio capture mode is enabled in project settings.
+    /// Returns true if audio capture mode is enabled for this browser instance. Reflects
+    /// this instance's own `enable_audio_capture` property, not necessarily the global
+    /// `godot_cef/audio/enable_audio_capture` project setting it defaulted from.
     #[func]
     pub fn is_audio_capture_enabled(&self) -> bool {
-        crate::settings::is_audio_capture_enabled()
+        self.enable_audio_capture
     }
 
     #[func]

@@ -38,6 +38,8 @@ impl CefTexture2D {
             popup_policy: self.popup_policy,
             preload_script: self.preload_script.clone(),
             preload_script_path: self.preload_script_path.clone(),
+            enable_audio_capture: self.enable_audio_capture,
+            browser_context_id: self.browser_context_id.clone(),
             software_target_texture: Some(self.fallback_texture.clone()),
             log_prefix: "CefTexture2D",
         });

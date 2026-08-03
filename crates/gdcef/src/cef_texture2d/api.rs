@@ -78,6 +78,26 @@ impl CefTexture2D {
     }
 
     #[func]
+    pub fn get_enable_audio_capture(&self) -> bool {
+        self.enable_audio_capture
+    }
+
+    #[func]
+    pub fn set_enable_audio_capture(&mut self, enabled: bool) {
+        self.enable_audio_capture = enabled;
+    }
+
+    #[func]
+    pub fn get_browser_context_id(&self) -> GString {
+        self.browser_context_id.clone()
+    }
+
+    #[func]
+    pub fn set_browser_context_id(&mut self, id: GString) {
+        self.browser_context_id = id;
+    }
+
+    #[func]
     pub(crate) fn get_texture_size_property(&self) -> Vector2i {
         self.texture_size
     }

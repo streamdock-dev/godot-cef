@@ -37,6 +37,14 @@ pub(crate) struct BackendCreateParams {
     pub popup_policy: i32,
     pub preload_script: String,
     pub preload_script_path: String,
+    /// Per-instance override for whether this browser's audio is captured into an
+    /// internal buffer (for `create_audio_stream`/`push_audio_to_playback`) instead of
+    /// played directly through the system's default output.
+    pub enable_audio_capture: bool,
+    /// Per-instance browser profile identifier. Empty means "share the addon's single
+    /// global profile" (today's behavior); non-empty gives this browser its own isolated
+    /// cookie jar/cache/local storage. See `sanitize_browser_context_id`.
+    pub browser_context_id: String,
     pub software_target_texture: Option<Gd<ImageTexture>>,
     pub log_prefix: &'static str,
 }
@@ -53,6 +61,7 @@ struct BrowserCreateParams {
     permission_request_counter: crate::browser::PermissionRequestIdCounter,
     pending_permission_requests: crate::browser::PendingPermissionRequests,
     pending_permission_aggregates: crate::browser::PendingPermissionAggregates,
+    enable_audio_capture: bool,
 }
 
 fn color_to_cef_color(color: Color) -> u32 {
@@ -90,6 +99,56 @@ fn build_adblock_engine(log_prefix: &str) -> Option<Rc<adblock::Engine>> {
     let _metadata = filter_set.add_filter_list(&rules, ParseOptions::default());
     godot::global::godot_print!("[{}] Adblock filter list loaded.", log_prefix);
     Some(Rc::new(adblock::Engine::from_filter_set(filter_set, true)))
+}
+
+/// Turns a caller-supplied browser-context id into a filesystem-safe directory name, or
+/// `None` if `id` is empty (meaning "use the shared global profile" -- today's behavior).
+/// The id is treated as untrusted input even though today's only callers pass internal
+/// GUIDs/slugs: anything containing characters outside `[A-Za-z0-9_-]`, or longer than a
+/// reasonable directory-name length, is replaced by a stable hash of its contents instead
+/// of being used verbatim, so a caller can never inject a path traversal (`..`, `/`, `\`)
+/// or an otherwise-invalid path component.
+fn sanitize_browser_context_id(id: &str) -> Option<String> {
+    if id.is_empty() {
+        return None;
+    }
+
+    let is_safe = id.len() <= 128
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+
+    if is_safe {
+        Some(id.to_string())
+    } else {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        id.hash(&mut hasher);
+        Some(format!("ctx-{:016x}", hasher.finish()))
+    }
+}
+
+/// Builds the `RequestContextSettings` for a new browser's `RequestContext`. An empty
+/// `browser_context_id` reproduces today's behavior exactly (default settings, empty
+/// `cache_path`, resolving to the shared global profile under `root_cache_path`). A
+/// non-empty id gets its own `cache_path` subdirectory under the configured data path,
+/// giving it independent cookie/cache/local-storage storage.
+fn build_request_context_settings(browser_context_id: &str) -> RequestContextSettings {
+    let Some(sanitized) = sanitize_browser_context_id(browser_context_id) else {
+        return RequestContextSettings::default();
+    };
+
+    let cache_dir = crate::settings::get_data_path()
+        .join("contexts")
+        .join(sanitized);
+    let cache_path: CefStringUtf16 = cache_dir.to_string_lossy().as_ref().into();
+
+    RequestContextSettings {
+        cache_path,
+        ..Default::default()
+    }
 }
 
 pub(crate) fn should_use_accelerated_osr(enable_accelerated_osr: bool, log_prefix: &str) -> bool {
@@ -445,8 +504,9 @@ pub(crate) fn try_create_browser(
     };
 
     let adblock_engine = build_adblock_engine(params.log_prefix);
+    let request_context_settings = build_request_context_settings(&params.browser_context_id);
     let mut context = cef::request_context_create_context(
-        Some(&RequestContextSettings::default()),
+        Some(&request_context_settings),
         Some(&mut webrender::RequestContextHandlerImpl::build(
             webrender::OsrRequestContextHandler::new(adblock_engine),
         )),
@@ -469,6 +529,7 @@ pub(crate) fn try_create_browser(
         permission_request_counter,
         pending_permission_requests,
         pending_permission_aggregates,
+        enable_audio_capture: params.enable_audio_capture,
     };
 
     if use_accelerated {
@@ -568,6 +629,7 @@ fn create_software_browser(
         permission_request_counter,
         pending_permission_requests,
         pending_permission_aggregates,
+        enable_audio_capture,
     } = params;
     godot::global::godot_print!(
         "[{}] Creating browser in software rendering mode",
@@ -596,7 +658,6 @@ fn create_software_browser(
     let cursor_type = render_handler.get_cursor_type();
     let popup_state: PopupStateQueue = render_handler.get_popup_state();
     let sample_rate = AudioServer::singleton().get_mix_rate();
-    let enable_audio_capture = crate::settings::is_audio_capture_enabled();
     let queues = webrender::ClientQueues::new(
         sample_rate,
         enable_audio_capture,
@@ -706,6 +767,7 @@ fn create_accelerated_browser(
         permission_request_counter,
         pending_permission_requests,
         pending_permission_aggregates,
+        enable_audio_capture,
     } = params;
 
     let (rd_texture_rid, texture_2d_rd) = render::create_rd_texture(pixel_width, pixel_height)?;
@@ -727,7 +789,6 @@ fn create_accelerated_browser(
     let cursor_type = render_handler.get_cursor_type();
     let popup_state: PopupStateQueue = render_handler.get_popup_state();
     let sample_rate = AudioServer::singleton().get_mix_rate();
-    let enable_audio_capture = crate::settings::is_audio_capture_enabled();
     let queues = webrender::ClientQueues::new(
         sample_rate,
         enable_audio_capture,
@@ -799,7 +860,7 @@ fn create_accelerated_browser(
 
 #[cfg(test)]
 mod tests {
-    use super::color_to_cef_color;
+    use super::{color_to_cef_color, sanitize_browser_context_id};
     use godot::prelude::Color;
 
     #[test]
@@ -821,5 +882,51 @@ mod tests {
             color_to_cef_color(color),
             u32::from_be_bytes([255, 0, 255, 63])
         );
+    }
+
+    #[test]
+    fn sanitize_browser_context_id_empty_means_shared_profile() {
+        assert_eq!(sanitize_browser_context_id(""), None);
+    }
+
+    #[test]
+    fn sanitize_browser_context_id_passes_through_safe_ids_verbatim() {
+        let id = "browser-source_1234-ABCD";
+        assert_eq!(sanitize_browser_context_id(id), Some(id.to_string()));
+    }
+
+    #[test]
+    fn sanitize_browser_context_id_hashes_ids_with_path_traversal_attempts() {
+        let sanitized = sanitize_browser_context_id("../../etc/passwd").unwrap();
+        assert!(!sanitized.contains(".."));
+        assert!(!sanitized.contains('/'));
+        assert!(sanitized.starts_with("ctx-"));
+    }
+
+    #[test]
+    fn sanitize_browser_context_id_hashes_ids_with_disallowed_characters() {
+        let sanitized = sanitize_browser_context_id("weird id/with spaces!").unwrap();
+        assert!(sanitized.starts_with("ctx-"));
+        assert!(
+            sanitized
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        );
+    }
+
+    #[test]
+    fn sanitize_browser_context_id_hashing_is_deterministic() {
+        let id = "some/unsafe id";
+        assert_eq!(
+            sanitize_browser_context_id(id),
+            sanitize_browser_context_id(id)
+        );
+    }
+
+    #[test]
+    fn sanitize_browser_context_id_hashes_overly_long_ids() {
+        let long_id = "a".repeat(129);
+        let sanitized = sanitize_browser_context_id(&long_id).unwrap();
+        assert!(sanitized.starts_with("ctx-"));
     }
 }

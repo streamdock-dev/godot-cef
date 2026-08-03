@@ -65,6 +65,8 @@ impl CefTextureRuntime {
             popup_policy,
             preload_script,
             preload_script_path,
+            enable_audio_capture,
+            browser_context_id,
             software_target_texture,
             log_prefix,
         } = config;
@@ -86,6 +88,8 @@ impl CefTextureRuntime {
             popup_policy,
             preload_script: preload_script.to_string(),
             preload_script_path: preload_script_path.to_string(),
+            enable_audio_capture,
+            browser_context_id: browser_context_id.to_string(),
             software_target_texture,
             log_prefix,
         };
