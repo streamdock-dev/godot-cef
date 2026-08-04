@@ -300,6 +300,14 @@ impl CefTexture {
         self.base_mut().set_material(&Self::make_browser_material());
         // Must explicitly enable processing when using on_notification instead of fn process()
         self.base_mut().set_process(true);
+        // Godot auto-enables _input() processing for any node overriding that virtual (which
+        // this one does, see `fn input` below) the instant it enters the tree, regardless of
+        // visibility or MouseFilter. Left alone, that means every CefTexture -- including ones
+        // a consumer never intended to be globally interactive -- silently relays every input
+        // event anywhere in the app into the embedded page. Opt back out here so input delivery
+        // is always an explicit choice (see set_input_enabled/forward_input_event below) rather
+        // than an engine default consumers have to remember to undo themselves.
+        self.base_mut().set_process_input(false);
         // Enable focus so we receive FOCUS_ENTER/EXIT notifications and can forward to CEF.
         self.base_mut().set_focus_mode(FocusMode::CLICK);
 
@@ -402,6 +410,51 @@ impl CefTexture {
             self.texture2d_helper
                 .bind()
                 .forward_key_event(key_event, self.ime_active);
+        }
+    }
+
+    #[func]
+    /// Whether this CefTexture processes Godot's global `_input()` notification at all --
+    /// defaults to false (set in on_ready) precisely so a freshly created CefTexture never
+    /// silently relays every input event anywhere in the app into its embedded page just by
+    /// existing in the tree. Turn this on for a CefTexture that's meant to behave like a normal
+    /// interactive on-screen widget (native, spatially-correct dispatch via `_input`); for a
+    /// CefTexture that's positioned off-canvas or shared across multiple on-screen placements,
+    /// leave this off and deliver input explicitly via forward_input_event instead.
+    pub fn set_input_enabled(&mut self, enabled: bool) {
+        self.base_mut().set_process_input(enabled);
+    }
+
+    #[func]
+    /// Delivers one input event directly to this CefTexture's browser, without going through
+    /// Godot's global `_input()` dispatch (see set_input_enabled). `event.position` is used
+    /// as-is -- the final local pixel coordinate within this CefTexture's own frame -- unlike
+    /// `_input()`'s own delivery path, which subtracts this node's get_global_position() out of
+    /// whatever viewport-space position the event arrived with. Callers that already know the
+    /// local point they want (e.g. because they captured it from their own on-screen widget,
+    /// possibly a completely different node than this one) should call this directly instead of
+    /// faking a viewport-space position to route through `_input()`.
+    pub fn forward_input_event(&mut self, event: Gd<InputEvent>) {
+        let pixel_scale = self.get_pixel_scale_factor();
+        let device_scale = self.get_device_scale_factor();
+        self.texture2d_helper.bind_mut().forward_input_event(
+            event,
+            pixel_scale,
+            device_scale,
+            self.ime_active,
+        );
+    }
+
+    #[func]
+    /// Sets/clears this CefTexture's browser-level focus (cursor blink, focus-dependent
+    /// JS/CSS) -- the same call on_notification's FOCUS_ENTER/FOCUS_EXIT already makes
+    /// internally when this CefTexture itself holds real Godot node focus. Exposed directly for
+    /// callers that deliver input via forward_input_event to a CefTexture that will never hold
+    /// Godot focus itself (e.g. it's off-canvas, or a different on-screen node is what actually
+    /// receives clicks) and so would otherwise never get a FOCUS_ENTER notification at all.
+    pub fn set_browser_focus(&mut self, focused: bool) {
+        if let Some(host) = self.with_app(|app| app.host()) {
+            host.set_focus(focused as _);
         }
     }
 

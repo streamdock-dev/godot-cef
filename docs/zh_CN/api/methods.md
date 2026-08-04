@@ -29,6 +29,52 @@ func _unhandled_input(event: InputEvent) -> void:
     browser_tex.forward_input_event(event, pixel_scale, device_scale, false)
 ```
 
+## 直接输入投递
+
+默认情况下 `CefTexture` 通过 Godot 的全局 `_input()` 通知接收输入 -- 但从本次
+更新起，该处理**默认是关闭的**，这样一个刚创建的 `CefTexture` 就不会仅仅因为
+存在于场景树中，就把应用里任何地方发生的输入事件都悄悄转发进它的嵌入页面。
+当你希望显式投递输入时（例如该 `CefTexture` 被放置在画布之外、被多个屏幕上的
+placement 共享，或者你自己的代码已经掌握了空间范围判断），请使用以下方法。
+
+### `set_input_enabled(enabled: bool)`
+
+启用或禁用这个 `CefTexture` 的 Godot `_input()` 处理。如果你希望这个节点表现
+得像一个普通的、屏幕上的可交互控件，拥有原生的、按位置正确分发的 `_input()`
+调度，就打开它。保持关闭（默认状态）并改用 `forward_input_event`，适用于你自
+己显式投递输入的场景。
+
+```gdscript
+cef_texture.set_input_enabled(true)
+```
+
+### `forward_input_event(event: InputEvent)`
+
+将一个输入事件直接投递给这个 `CefTexture` 的浏览器，完全绕过 Godot 的
+`_input()` 分发。`event.position` 会被原样使用 -- 即这个 `CefTexture` 自身坐
+标系下的最终本地像素坐标 -- 这与 `_input()` 自身的投递路径不同，后者会从事件
+到达时的 viewport 空间坐标中减去这个节点的 `get_global_position()`。内部会封
+装 `CefTexture2D.forward_input_event`，自动为你填入这个节点自身的像素/设备缩
+放系数以及 IME 状态。
+
+```gdscript
+var local_event := event.duplicate()
+local_event.position = local_click_position  # 已经是这个节点自身坐标系下的坐标
+cef_texture.forward_input_event(local_event)
+```
+
+### `set_browser_focus(focused: bool)`
+
+设置或清除这个 `CefTexture` 的浏览器级焦点（光标闪烁、依赖焦点的 JS/CSS）--
+与这个 `CefTexture` 自身持有真实 Godot 节点焦点时，`FOCUS_ENTER`/`FOCUS_EXIT`
+通知内部触发的调用相同。对于永远不会持有 Godot 焦点自身的 `CefTexture`（例如
+它被放置在画布之外，或者实际接收点击的是另一个屏幕上的节点），因此永远不会收
+到 `FOCUS_ENTER` 通知的情况，请直接调用这个方法。
+
+```gdscript
+cef_texture.set_browser_focus(true)
+```
+
 ## CefTexture2D 运行时辅助方法
 
 `CefTexture2D` 还提供运行时/浏览器控制相关的辅助方法。`CefTexture` 内部会使用

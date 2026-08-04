@@ -31,6 +31,59 @@ func _unhandled_input(event: InputEvent) -> void:
     browser_tex.forward_input_event(event, pixel_scale, device_scale, false)
 ```
 
+## Direct Input Delivery
+
+`CefTexture` receives input through Godot's global `_input()` notification by
+default -- but that processing is **disabled by default** (as of this
+addition) precisely so a freshly created `CefTexture` never silently relays
+every input event anywhere in your scene tree into its embedded page just by
+existing. Use these methods when you want to deliver input explicitly instead
+(e.g. the `CefTexture` is positioned off-canvas, shared across multiple
+on-screen placements, or you simply want spatial input scoping your own code
+already controls).
+
+### `set_input_enabled(enabled: bool)`
+
+Enables or disables this `CefTexture`'s Godot `_input()` processing. Turn this
+on if you want this node to behave like a normal, on-screen interactive
+widget with native, spatially-correct `_input()` dispatch. Leave it off (the
+default) and use `forward_input_event` instead if you're delivering input
+explicitly.
+
+```gdscript
+cef_texture.set_input_enabled(true)
+```
+
+### `forward_input_event(event: InputEvent)`
+
+Delivers one input event directly to this `CefTexture`'s browser, bypassing
+Godot's `_input()` dispatch entirely. `event.position` is used as-is -- the
+final local pixel coordinate within this `CefTexture`'s own frame -- unlike
+`_input()`'s own delivery path, which subtracts this node's
+`get_global_position()` out of whatever viewport-space position the event
+arrived with. Internally wraps `CefTexture2D.forward_input_event`, filling in
+this node's own pixel/device scale factors and IME state for you.
+
+```gdscript
+var local_event := event.duplicate()
+local_event.position = local_click_position  # already in this node's own frame
+cef_texture.forward_input_event(local_event)
+```
+
+### `set_browser_focus(focused: bool)`
+
+Sets or clears this `CefTexture`'s browser-level focus (cursor blink,
+focus-dependent JS/CSS) -- the same call `FOCUS_ENTER`/`FOCUS_EXIT`
+notifications already trigger internally when this `CefTexture` itself holds
+real Godot node focus. Call this directly for a `CefTexture` that will never
+hold Godot focus itself (e.g. it's off-canvas, or a different on-screen node
+is what actually receives clicks) and so would otherwise never get a
+`FOCUS_ENTER` notification at all.
+
+```gdscript
+cef_texture.set_browser_focus(true)
+```
+
 ## CefTexture2D Runtime Helpers
 
 `CefTexture2D` also exposes runtime/browser control helpers that `CefTexture`
