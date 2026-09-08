@@ -38,6 +38,8 @@ impl CefTexture2D {
             popup_policy: self.popup_policy,
             preload_script: self.preload_script.clone(),
             preload_script_path: self.preload_script_path.clone(),
+            custom_css: self.custom_css.clone(),
+            custom_fps: self.custom_fps,
             enable_audio_capture: self.enable_audio_capture,
             browser_context_id: self.browser_context_id.clone(),
             software_target_texture: Some(self.fallback_texture.clone()),
@@ -93,7 +95,7 @@ impl CefTexture2D {
 
         self.try_create_browser();
 
-        self.runtime.handle_max_fps_change();
+        self.runtime.handle_max_fps_change(self.custom_fps);
         let logical_size = self.logical_size();
         let dpi = self.get_dpi();
         let _ = self.runtime.handle_size_change(logical_size, dpi);

@@ -10,7 +10,7 @@ use crate::{cursor, render};
 
 impl CefTexture {
     pub(super) fn get_max_fps(&self) -> i32 {
-        backend::get_max_fps()
+        backend::get_max_fps(self.custom_fps)
     }
 
     pub(super) fn handle_max_fps_change(&mut self) {

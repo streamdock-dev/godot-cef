@@ -65,6 +65,8 @@ impl CefTextureRuntime {
             popup_policy,
             preload_script,
             preload_script_path,
+            custom_css,
+            custom_fps,
             enable_audio_capture,
             browser_context_id,
             software_target_texture,
@@ -81,13 +83,14 @@ impl CefTextureRuntime {
         let params = backend::BackendCreateParams {
             logical_size,
             dpi,
-            max_fps: backend::get_max_fps(),
+            max_fps: backend::get_max_fps(custom_fps),
             url: url.to_string(),
             enable_accelerated_osr,
             background_color,
             popup_policy,
             preload_script: preload_script.to_string(),
             preload_script_path: preload_script_path.to_string(),
+            custom_css: custom_css.to_string(),
             enable_audio_capture,
             browser_context_id: browser_context_id.to_string(),
             software_target_texture,
@@ -102,8 +105,8 @@ impl CefTextureRuntime {
         self.last_dpi = dpi;
     }
 
-    pub(crate) fn handle_max_fps_change(&mut self) {
-        let max_fps = backend::get_max_fps();
+    pub(crate) fn handle_max_fps_change(&mut self, custom_fps: i32) {
+        let max_fps = backend::get_max_fps(custom_fps);
         backend::handle_max_fps_change(&self.app, &mut self.last_max_fps, max_fps);
     }
 

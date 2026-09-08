@@ -62,6 +62,20 @@ pub struct CefTexture {
     preload_script_path: GString,
 
     #[export]
+    #[var(get = get_custom_css, set = set_custom_css)]
+    /// CSS injected as a `<style>` element into every page this browser loads (re-applied
+    /// on each navigation). Empty means no injection (default).
+    custom_css: GString,
+
+    #[export]
+    #[var(get = get_custom_fps, set = set_custom_fps)]
+    /// Per-instance override for the browser's windowless render rate. 0 (default) means
+    /// "no override" -- follow the `godot_cef/performance/max_frame_rate` project setting,
+    /// falling back to the engine/screen refresh rate. A positive value pins this browser
+    /// to that rate regardless of the global setting or Godot's own FPS.
+    custom_fps: i32,
+
+    #[export]
     #[var(get = get_enable_audio_capture, set = set_enable_audio_capture)]
     /// Per-instance override for audio capture mode. When true, this browser's audio is
     /// redirected into an internal buffer for Godot to consume (via `create_audio_stream`/
@@ -126,6 +140,8 @@ impl ITextureRect for CefTexture {
             popup_policy: crate::browser::popup_policy::BLOCK,
             preload_script: GString::new(),
             preload_script_path: GString::new(),
+            custom_css: GString::new(),
+            custom_fps: 0,
             enable_audio_capture: crate::settings::is_audio_capture_enabled(),
             browser_context_id: GString::new(),
             ime_position: Vector2i::new(0, 0),
@@ -517,6 +533,28 @@ impl CefTexture {
         self.texture2d_helper
             .bind_mut()
             .set_preload_script_path(path);
+    }
+
+    #[func]
+    fn get_custom_css(&self) -> GString {
+        self.custom_css.clone()
+    }
+
+    #[func]
+    fn set_custom_css(&mut self, css: GString) {
+        self.custom_css = css.clone();
+        self.texture2d_helper.bind_mut().set_custom_css(css);
+    }
+
+    #[func]
+    fn get_custom_fps(&self) -> i32 {
+        self.custom_fps
+    }
+
+    #[func]
+    fn set_custom_fps(&mut self, fps: i32) {
+        self.custom_fps = fps;
+        self.texture2d_helper.bind_mut().set_custom_fps(fps);
     }
 
     #[func]

@@ -78,6 +78,26 @@ impl CefTexture2D {
     }
 
     #[func]
+    pub(crate) fn get_custom_css(&self) -> GString {
+        self.custom_css.clone()
+    }
+
+    #[func]
+    pub(crate) fn set_custom_css(&mut self, css: GString) {
+        self.custom_css = css;
+    }
+
+    #[func]
+    pub(crate) fn get_custom_fps(&self) -> i32 {
+        self.custom_fps
+    }
+
+    #[func]
+    pub(crate) fn set_custom_fps(&mut self, fps: i32) {
+        self.custom_fps = fps;
+    }
+
+    #[func]
     pub fn get_enable_audio_capture(&self) -> bool {
         self.enable_audio_capture
     }

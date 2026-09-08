@@ -19,3 +19,4 @@ pub const ROUTE_TRIGGER_IME: &str = "triggerIme";
 pub const ROUTE_IME_CARET_POSITION: &str = "imeCaretPosition";
 
 pub const EXTRA_INFO_PRELOAD_SCRIPT: &str = "godotCefPreloadScript";
+pub const EXTRA_INFO_CUSTOM_CSS: &str = "godotCefCustomCss";

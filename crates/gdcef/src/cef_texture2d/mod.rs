@@ -40,6 +40,8 @@ pub(crate) struct RuntimeCreateConfig {
     popup_policy: i32,
     preload_script: GString,
     preload_script_path: GString,
+    custom_css: GString,
+    custom_fps: i32,
     enable_audio_capture: bool,
     browser_context_id: GString,
     software_target_texture: Option<Gd<ImageTexture>>,
@@ -88,6 +90,14 @@ pub struct CefTexture2D {
     #[export]
     #[var(get = get_preload_script_path, set = set_preload_script_path)]
     preload_script_path: GString,
+
+    #[export]
+    #[var(get = get_custom_css, set = set_custom_css)]
+    custom_css: GString,
+
+    #[export]
+    #[var(get = get_custom_fps, set = set_custom_fps)]
+    custom_fps: i32,
 
     #[export]
     #[var(
@@ -145,6 +155,8 @@ impl ITexture2D for CefTexture2D {
             popup_policy: crate::browser::popup_policy::BLOCK,
             preload_script: GString::new(),
             preload_script_path: GString::new(),
+            custom_css: GString::new(),
+            custom_fps: 0,
             enable_audio_capture: crate::settings::is_audio_capture_enabled(),
             browser_context_id: GString::new(),
             texture_size,

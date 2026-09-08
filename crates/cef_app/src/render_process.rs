@@ -12,7 +12,7 @@ use cef::{
 };
 
 use crate::ipc_contract::{
-    EXTRA_INFO_PRELOAD_SCRIPT, ROUTE_IPC_BINARY_GODOT_TO_RENDERER,
+    EXTRA_INFO_CUSTOM_CSS, EXTRA_INFO_PRELOAD_SCRIPT, ROUTE_IPC_BINARY_GODOT_TO_RENDERER,
     ROUTE_IPC_DATA_GODOT_TO_RENDERER, ROUTE_IPC_GODOT_TO_RENDERER, ROUTE_TRIGGER_IME,
 };
 use crate::v8_handlers::{
@@ -42,6 +42,13 @@ fn send_browser_bool_message(frame: Option<&mut Frame>, route: &str, value: bool
 static PRELOAD_SCRIPTS: LazyLock<Mutex<HashMap<i32, String>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+// Same lifetime constraint as `PRELOAD_SCRIPTS` above, keyed by the same browser id.
+// Re-injected on every `on_context_created` for the main frame, so it survives
+// navigations for the life of the browser (matching the property's "applies to every
+// page this browser loads" semantics).
+static CUSTOM_CSS_STYLES: LazyLock<Mutex<HashMap<i32, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 fn log_preload_exception(exception: Option<V8Exception>) {
     let Some(exception) = exception else {
         eprintln!("[GodotCef] Preload script failed without exception details");
@@ -56,6 +63,57 @@ fn log_preload_exception(exception: Option<V8Exception>) {
         message,
         source_line
     );
+}
+
+/// Escapes `input` for safe embedding as a double-quoted JS string literal.
+/// U+2028/U+2029 are escaped too since they terminate a JS string literal even though
+/// they aren't ASCII control characters.
+fn escape_js_string(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() + 2);
+    out.push('"');
+    for ch in input.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Builds a script that appends `css` as a `<style>` element to the document, waiting for
+/// `<head>` to exist if the document is still loading. Self-contained (no external state)
+/// so it can be re-run on every navigation.
+fn build_css_injection_script(css: &str) -> String {
+    let escaped_css = escape_js_string(css);
+    format!(
+        "(function() {{
+            var css = {escaped_css};
+            function inject() {{
+                var head = document.head || document.documentElement;
+                if (!head) {{ return; }}
+                var style = document.createElement('style');
+                style.setAttribute('data-godot-cef-custom-css', '1');
+                style.textContent = css;
+                head.appendChild(style);
+            }}
+            if (document.readyState === 'loading') {{
+                document.addEventListener('DOMContentLoaded', inject);
+            }} else {{
+                inject();
+            }}
+        }})();"
+    )
+}
+
+fn inject_custom_css(frame: &mut Frame, css: &str) {
+    let script: CefStringUtf16 = build_css_injection_script(css).as_str().into();
+    frame.execute_java_script(Some(&script), None, 0);
 }
 
 fn eval_preload_script(context: &mut V8Context, script: &str) {
@@ -102,26 +160,40 @@ wrap_render_process_handler! {
             };
             let browser_id = browser.identifier();
 
-            let key: CefStringUtf16 = EXTRA_INFO_PRELOAD_SCRIPT.into();
-            let Ok(mut preload_scripts) = PRELOAD_SCRIPTS.lock() else {
+            if let Ok(mut preload_scripts) = PRELOAD_SCRIPTS.lock() {
+                preload_scripts.remove(&browser_id);
+            } else {
                 eprintln!("[GodotCef] preload cache lock failed in on_browser_created");
-                return;
-            };
-            preload_scripts.remove(&browser_id);
+            }
+            if let Ok(mut custom_css_styles) = CUSTOM_CSS_STYLES.lock() {
+                custom_css_styles.remove(&browser_id);
+            } else {
+                eprintln!("[GodotCef] custom css cache lock failed in on_browser_created");
+            }
 
             let Some(extra_info) = extra_info else {
                 return;
             };
-            if extra_info.has_key(Some(&key)) == 0 {
-                return;
+
+            let preload_key: CefStringUtf16 = EXTRA_INFO_PRELOAD_SCRIPT.into();
+            if extra_info.has_key(Some(&preload_key)) != 0 {
+                let script = CefStringUtf16::from(&extra_info.string(Some(&preload_key))).to_string();
+                if !script.is_empty()
+                    && let Ok(mut preload_scripts) = PRELOAD_SCRIPTS.lock()
+                {
+                    preload_scripts.insert(browser_id, script);
+                }
             }
 
-            let script = CefStringUtf16::from(&extra_info.string(Some(&key))).to_string();
-            if script.is_empty() {
-                return;
+            let css_key: CefStringUtf16 = EXTRA_INFO_CUSTOM_CSS.into();
+            if extra_info.has_key(Some(&css_key)) != 0 {
+                let css = CefStringUtf16::from(&extra_info.string(Some(&css_key))).to_string();
+                if !css.is_empty()
+                    && let Ok(mut custom_css_styles) = CUSTOM_CSS_STYLES.lock()
+                {
+                    custom_css_styles.insert(browser_id, css);
+                }
             }
-
-            preload_scripts.insert(browser_id, script);
         }
 
         fn on_context_created(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, context: Option<&mut V8Context>) {
@@ -166,21 +238,33 @@ wrap_render_process_handler! {
                 .lock()
                 .ok()
                 .and_then(|scripts| scripts.get(&browser_id).cloned());
-            let Some(preload_script) = preload_script else {
-                return;
-            };
+            if let Some(preload_script) = preload_script {
+                eval_preload_script(context, &preload_script);
+            }
 
-            eval_preload_script(context, &preload_script);
+            let custom_css = CUSTOM_CSS_STYLES
+                .lock()
+                .ok()
+                .and_then(|styles| styles.get(&browser_id).cloned());
+            if let Some(custom_css) = custom_css {
+                inject_custom_css(frame, &custom_css);
+            }
         }
 
         fn on_browser_destroyed(&self, browser: Option<&mut Browser>) {
             let Some(browser) = browser else {
                 return;
             };
+            let browser_id = browser.identifier();
             if let Ok(mut preload_scripts) = PRELOAD_SCRIPTS.lock() {
-                preload_scripts.remove(&browser.identifier());
+                preload_scripts.remove(&browser_id);
             } else {
                 eprintln!("[GodotCef] preload cache lock failed in on_browser_destroyed");
+            }
+            if let Ok(mut custom_css_styles) = CUSTOM_CSS_STYLES.lock() {
+                custom_css_styles.remove(&browser_id);
+            } else {
+                eprintln!("[GodotCef] custom css cache lock failed in on_browser_destroyed");
             }
         }
 

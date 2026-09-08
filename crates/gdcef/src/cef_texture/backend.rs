@@ -4,7 +4,7 @@ use cef::{
     RequestContextSettings, WindowInfo,
 };
 use cef_app::PhysicalSize;
-use cef_app::ipc_contract::EXTRA_INFO_PRELOAD_SCRIPT;
+use cef_app::ipc_contract::{EXTRA_INFO_CUSTOM_CSS, EXTRA_INFO_PRELOAD_SCRIPT};
 use godot::classes::FileAccess;
 use godot::classes::Image;
 use godot::classes::file_access::ModeFlags;
@@ -37,6 +37,9 @@ pub(crate) struct BackendCreateParams {
     pub popup_policy: i32,
     pub preload_script: String,
     pub preload_script_path: String,
+    /// CSS injected as a `<style>` element into every document this browser loads
+    /// (re-applied on each navigation). Empty means no injection (default).
+    pub custom_css: String,
     /// Per-instance override for whether this browser's audio is captured into an
     /// internal buffer (for `create_audio_stream`/`push_audio_to_playback`) instead of
     /// played directly through the system's default output.
@@ -56,6 +59,7 @@ struct BrowserCreateParams {
     pixel_height: i32,
     url: String,
     preload_script: Option<String>,
+    custom_css: String,
     popup_policy: PopupPolicyFlag,
     permission_policy: crate::browser::PermissionPolicyFlag,
     permission_request_counter: crate::browser::PermissionRequestIdCounter,
@@ -213,6 +217,7 @@ fn resolve_preload_script(script: &str, path: &str) -> Result<Option<String>, Ce
 
 fn build_browser_extra_info(
     preload_script: Option<&str>,
+    custom_css: &str,
 ) -> Result<cef::DictionaryValue, CefError> {
     let Some(extra_info) = cef::dictionary_value_create() else {
         return Err(CefError::BrowserCreationFailed(
@@ -228,10 +233,25 @@ fn build_browser_extra_info(
         ));
     }
 
+    let css_key: CefStringUtf16 = EXTRA_INFO_CUSTOM_CSS.into();
+    let css_value: CefStringUtf16 = custom_css.into();
+    if extra_info.set_string(Some(&css_key), Some(&css_value)) == 0 {
+        return Err(CefError::BrowserCreationFailed(
+            "failed to write custom css to extra_info".into(),
+        ));
+    }
+
     Ok(extra_info)
 }
 
-pub(crate) fn get_max_fps() -> i32 {
+/// `custom_fps_override` is a per-instance pin (> 0) that takes priority over the global
+/// `godot_cef/performance/max_frame_rate` project setting and the engine/screen fallbacks
+/// below; 0 or negative means "no override" (today's behavior).
+pub(crate) fn get_max_fps(custom_fps_override: i32) -> i32 {
+    if custom_fps_override > 0 {
+        return custom_fps_override;
+    }
+
     let setting_fps = crate::settings::get_max_frame_rate();
     if setting_fps > 0 {
         return setting_fps;
@@ -524,6 +544,7 @@ pub(crate) fn try_create_browser(
         pixel_height,
         url: params.url.clone(),
         preload_script,
+        custom_css: params.custom_css.clone(),
         popup_policy,
         permission_policy,
         permission_request_counter,
@@ -624,6 +645,7 @@ fn create_software_browser(
         pixel_height,
         url,
         preload_script,
+        custom_css,
         popup_policy,
         permission_policy,
         permission_request_counter,
@@ -690,7 +712,7 @@ fn create_software_browser(
         queues.clone(),
         popup_policy.clone(),
     );
-    let mut extra_info = build_browser_extra_info(preload_script.as_deref())?;
+    let mut extra_info = build_browser_extra_info(preload_script.as_deref(), &custom_css)?;
     let cef_url: CefStringUtf16 = url.as_str().into();
 
     let browser = cef::browser_host_create_browser_sync(
@@ -762,6 +784,7 @@ fn create_accelerated_browser(
         pixel_height,
         url,
         preload_script,
+        custom_css,
         popup_policy,
         permission_policy,
         permission_request_counter,
@@ -806,7 +829,7 @@ fn create_accelerated_browser(
         queues.clone(),
         popup_policy.clone(),
     );
-    let mut extra_info = build_browser_extra_info(preload_script.as_deref())?;
+    let mut extra_info = build_browser_extra_info(preload_script.as_deref(), &custom_css)?;
     let cef_url: CefStringUtf16 = url.as_str().into();
 
     let browser = match cef::browser_host_create_browser_sync(
