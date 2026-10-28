@@ -1,8 +1,10 @@
 use std::cell::RefCell;
 
 use cef::{
-    BrowserProcessHandler, CommandLine, ImplBrowserProcessHandler, ImplCommandLine,
-    WrapBrowserProcessHandler, rc::Rc, wrap_browser_process_handler,
+    Browser, BrowserProcessHandler, Client, CommandLine, ImplBrowser, ImplBrowserHost,
+    ImplBrowserProcessHandler, ImplClient, ImplCommandLine, ImplLifeSpanHandler, LifeSpanHandler,
+    WrapBrowserProcessHandler, WrapClient, WrapLifeSpanHandler, rc::Rc,
+    wrap_browser_process_handler, wrap_client, wrap_life_span_handler,
 };
 
 use crate::app::{GpuDeviceIds, SecurityConfig};
@@ -38,6 +40,16 @@ wrap_browser_process_handler! {
     impl BrowserProcessHandler {
         fn on_context_initialized(&self) {
             *self.handler.is_cef_ready.borrow_mut() = true;
+        }
+
+        /// The client for a window Chromium opens by itself -- an extension's welcome or
+        /// "updated" tab, a chrome.tabs.create -- as opposed to the off-screen browsers this
+        /// addon creates, which carry their own client. Those windows are real desktop windows
+        /// a Godot app never asked for, so they are closed as soon as they exist. (Returning
+        /// None instead would leave them open and unmanaged, and would block shutdown until
+        /// someone closed them by hand.)
+        fn default_client(&self) -> Option<Client> {
+            Some(UnrequestedWindowClient::new(UnrequestedWindowCloser::new()))
         }
 
         fn on_before_child_process_launch(&self, command_line: Option<&mut CommandLine>) {
@@ -77,5 +89,30 @@ wrap_browser_process_handler! {
 impl BrowserProcessHandlerBuilder {
     pub(crate) fn build(handler: OsrBrowserProcessHandler) -> BrowserProcessHandler {
         Self::new(handler)
+    }
+}
+
+wrap_life_span_handler! {
+    pub(crate) struct UnrequestedWindowCloser {}
+
+    impl LifeSpanHandler {
+        fn on_after_created(&self, browser: Option<&mut Browser>) {
+            if let Some(host) = browser.and_then(|b| b.host()) {
+                eprintln!("[godot_cef] closing a window Chromium opened by itself (e.g. an extension tab)");
+                host.close_browser(1);
+            }
+        }
+    }
+}
+
+wrap_client! {
+    pub(crate) struct UnrequestedWindowClient {
+        closer: LifeSpanHandler,
+    }
+
+    impl Client {
+        fn life_span_handler(&self) -> Option<LifeSpanHandler> {
+            Some(self.closer.clone())
+        }
     }
 }

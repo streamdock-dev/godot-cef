@@ -106,7 +106,7 @@ fn build_adblock_engine(log_prefix: &str) -> Option<Rc<adblock::Engine>> {
 }
 
 /// Turns a caller-supplied browser-context id into a filesystem-safe directory name, or
-/// `None` if `id` is empty (meaning "use the shared global profile" -- today's behavior).
+/// `None` if `id` is empty (meaning "use the shared global profile", see `create_request_context`).
 /// The id is treated as untrusted input even though today's only callers pass internal
 /// GUIDs/slugs: anything containing characters outside `[A-Za-z0-9_-]`, or longer than a
 /// reasonable directory-name length, is replaced by a stable hash of its contents instead
@@ -134,24 +134,42 @@ fn sanitize_browser_context_id(id: &str) -> Option<String> {
     }
 }
 
-/// Builds the `RequestContextSettings` for a new browser's `RequestContext`. An empty
-/// `browser_context_id` reproduces today's behavior exactly (default settings, empty
-/// `cache_path`, resolving to the shared global profile under `root_cache_path`). A
-/// non-empty id gets its own `cache_path` subdirectory under the configured data path,
-/// giving it independent cookie/cache/local-storage storage.
-fn build_request_context_settings(browser_context_id: &str) -> RequestContextSettings {
-    let Some(sanitized) = sanitize_browser_context_id(browser_context_id) else {
-        return RequestContextSettings::default();
-    };
-
+/// The `RequestContextSettings` for a browser with its own profile: a `cache_path`
+/// subdirectory under the configured data path, giving it independent
+/// cookie/cache/local-storage storage.
+fn build_request_context_settings(sanitized_id: &str) -> RequestContextSettings {
     let cache_dir = crate::settings::get_data_path()
         .join("contexts")
-        .join(sanitized);
+        .join(sanitized_id);
     let cache_path: CefStringUtf16 = cache_dir.to_string_lossy().as_ref().into();
 
     RequestContextSettings {
         cache_path,
         ..Default::default()
+    }
+}
+
+/// The `RequestContext` a new browser runs in, carrying `handler` either way.
+///
+/// A non-empty `browser_context_id` gets its own profile (`build_request_context_settings`).
+/// An empty one shares the global profile's storage. It used to be created with default
+/// settings, whose empty `cache_path` makes CEF create an in-memory, incognito context
+/// instead -- not the shared profile this was documented as -- so its cookies and logins were
+/// lost on restart, and Chrome extensions loaded with `--load-extension` (which load into the
+/// global profile, and are off in incognito) never reached its pages.
+fn create_request_context(
+    browser_context_id: &str,
+    handler: &mut cef::RequestContextHandler,
+) -> Option<cef::RequestContext> {
+    match sanitize_browser_context_id(browser_context_id) {
+        Some(sanitized) => cef::request_context_create_context(
+            Some(&build_request_context_settings(&sanitized)),
+            Some(handler),
+        ),
+        None => {
+            let mut global = cef::request_context_get_global_context();
+            cef::request_context_cef_create_context_shared(global.as_mut(), Some(handler))
+        }
     }
 }
 
@@ -524,12 +542,11 @@ pub(crate) fn try_create_browser(
     };
 
     let adblock_engine = build_adblock_engine(params.log_prefix);
-    let request_context_settings = build_request_context_settings(&params.browser_context_id);
-    let mut context = cef::request_context_create_context(
-        Some(&request_context_settings),
-        Some(&mut webrender::RequestContextHandlerImpl::build(
+    let mut context = create_request_context(
+        &params.browser_context_id,
+        &mut webrender::RequestContextHandlerImpl::build(
             webrender::OsrRequestContextHandler::new(adblock_engine),
-        )),
+        ),
     );
     if let Some(ctx) = context.as_mut() {
         godot_protocol::register_res_scheme_handler_on_context(ctx);
