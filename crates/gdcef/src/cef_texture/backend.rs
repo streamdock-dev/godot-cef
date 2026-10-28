@@ -544,9 +544,9 @@ pub(crate) fn try_create_browser(
     let adblock_engine = build_adblock_engine(params.log_prefix);
     let mut context = create_request_context(
         &params.browser_context_id,
-        &mut webrender::RequestContextHandlerImpl::build(
-            webrender::OsrRequestContextHandler::new(adblock_engine),
-        ),
+        &mut webrender::RequestContextHandlerImpl::build(webrender::OsrRequestContextHandler::new(
+            adblock_engine,
+        )),
     );
     if let Some(ctx) = context.as_mut() {
         godot_protocol::register_res_scheme_handler_on_context(ctx);
