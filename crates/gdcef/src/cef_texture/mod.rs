@@ -89,9 +89,11 @@ pub struct CefTexture {
     /// Per-instance browser profile identifier. When non-empty, this browser gets its own
     /// isolated cookie jar/cache/local storage instead of sharing the addon's single global
     /// profile. Two `CefTexture`/`CefTexture2D` instances with the same non-empty id share
-    /// one profile; different ids (or the default, empty) never share cookies with each
-    /// other. Must be set before the browser is created -- changing it after the browser
-    /// already exists has no effect until the node is recreated.
+    /// one profile; different ids never share cookies with each other. Empty (the default)
+    /// is the global profile itself: persistent, shared by every empty-id instance, and the
+    /// one extensions loaded with `--load-extension` run in. Must be set before the browser
+    /// is created -- changing it after the browser already exists has no effect until the
+    /// node is recreated.
     browser_context_id: GString,
 
     #[var]
