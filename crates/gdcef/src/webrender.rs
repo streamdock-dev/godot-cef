@@ -128,10 +128,9 @@ fn bgra_to_rgba(bgra: &[u8]) -> Vec<u8> {
 
     // Handle remaining pixels that don't fit in a 16-byte chunk
     let remainder_start = simd_chunks * 16;
-    for (src, dst) in bgra[remainder_start..]
-        .chunks_exact(4)
-        .zip(rgba[remainder_start..].chunks_exact_mut(4))
-    {
+    let (src_pixels, _) = bgra[remainder_start..].as_chunks::<4>();
+    let (dst_pixels, _) = rgba[remainder_start..].as_chunks_mut::<4>();
+    for (src, dst) in src_pixels.iter().zip(dst_pixels.iter_mut()) {
         dst[0] = src[2]; // R
         dst[1] = src[1]; // G
         dst[2] = src[0]; // B
