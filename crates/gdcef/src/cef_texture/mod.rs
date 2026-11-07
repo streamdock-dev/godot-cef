@@ -357,6 +357,12 @@ impl CefTexture {
         self.update_texture();
 
         if self.with_app(|app| app.state.is_some()) {
+            // Chromium can show a real window from inside the pump (an extension's welcome tab,
+            // say). On Windows ShowWindow calls straight back into Godot's window procedure on
+            // this stack, and Godot then notifies the whole tree, this node included. The guard
+            // releases this node's borrow for the duration so that re-entry is legal rather than
+            // a fatal "already bound" panic. Don't touch `self` state across this call.
+            let _reentry_guard = self.base_mut();
             do_message_loop_work();
         }
 
