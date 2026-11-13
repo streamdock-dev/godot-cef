@@ -124,6 +124,9 @@ pub struct CefTexture {
     // Touch state
 
     // Find-in-page state
+
+    // Main-view paints since this node was created (see `get_paint_count`).
+    paint_count: u64,
 }
 
 #[godot_api]
@@ -160,6 +163,7 @@ impl ITextureRect for CefTexture {
             popup_texture: None,
             #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
             popup_texture_2d_rd: None,
+            paint_count: 0,
         }
     }
 
@@ -493,6 +497,15 @@ impl CefTexture {
     fn set_url_property(&mut self, url: GString) {
         self.url = url.clone();
         self.texture2d_helper.bind_mut().set_url_property(url);
+    }
+
+    /// Main-view paints CEF has delivered since this node was created. CEF paints only when the
+    /// page changed (capped by the windowless frame rate), so a caller that reads this once per
+    /// frame sees real new pictures, and a jump of more than one is paints replaced before
+    /// Godot drew them. Updated as events are drained each frame.
+    #[func]
+    fn get_paint_count(&self) -> i64 {
+        self.paint_count as i64
     }
 
     #[func]

@@ -145,6 +145,8 @@ impl CefTexture {
             std::mem::take(&mut *queues)
         };
 
+        self.paint_count += events.view_paints;
+
         // Now process events without holding the lock
         self.emit_message_signals(&events.messages);
         self.emit_binary_message_signals(&events.binary_messages);

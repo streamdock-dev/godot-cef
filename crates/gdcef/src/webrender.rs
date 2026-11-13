@@ -387,6 +387,7 @@ impl_common_render_handler!(SoftwareOsrHandler, handler: cef_app::OsrRenderHandl
             if let Ok(mut frame_buffer) = self.handler.frame_buffer.lock() {
                 frame_buffer.update(rgba_data, width, height);
             }
+            with_event_queues(&self.event_queues, |queues| queues.view_paints += 1);
         } else if type_ == PaintElementType::POPUP
             && let Ok(mut popup_state) = self.handler.popup_state.lock() {
                 popup_state.update_buffer(rgba_data, width, height);
@@ -408,6 +409,9 @@ impl_common_render_handler!(AcceleratedOsrHandler, handler: PlatformAcceleratedR
         _dirty_rects: Option<&[Rect]>,
         info: Option<&AcceleratedPaintInfo>,
     ) {
+        if type_ == PaintElementType::VIEW && info.is_some() {
+            with_event_queues(&self.event_queues, |queues| queues.view_paints += 1);
+        }
         self.handler.on_accelerated_paint(type_, info);
     }
 

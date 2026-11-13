@@ -418,6 +418,11 @@ pub struct EventQueues {
     pub cookie_events: VecDeque<CookieEvent>,
     /// Render process terminated event.
     pub render_process_terminated: VecDeque<(String, cef::TerminationStatus)>, // (reason, status)
+    /// Main-view paints CEF delivered since the last drain (popups excluded). CEF paints only
+    /// when the page changed, up to the windowless frame rate, so this counts real new
+    /// pictures; more than one per drain means the earlier ones were replaced before Godot drew
+    /// them.
+    pub view_paints: u64,
 }
 
 impl EventQueues {
