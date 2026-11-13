@@ -249,7 +249,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: Godot CEF ${{ github.ref_name }}
-          draft: true # release is draft until it is manually published
+          # StreamDock's own tags (vX.Y.Z-streamdock.N) publish at once, as pre-releases: the
+          # app's CI downloads the zip by tag, so a draft just blocks it until someone clicks
+          # Publish. Any other tag still waits as a draft for manual review.
+          draft: ${{ !contains(github.ref_name, '-streamdock.') }}
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           files: godot_cef-${{ github.ref_name }}.zip
