@@ -112,8 +112,15 @@ impl CefTexture {
     }
 
     /// Activates IME by focusing the hidden LineEdit proxy.
+    ///
+    /// Only for a CefTexture that holds Godot focus itself. A page can focus a text field on its
+    /// own (autofocus, script), and for a CefTexture the user is not typing into -- an
+    /// off-screen one rendering a scene source, or one fed through forward_input_event -- taking
+    /// focus here moved the whole app's keyboard focus into a hidden LineEdit at load. IME also
+    /// stays off for a forward_input_event caller, whose keys must carry their CHAR events: the
+    /// proxy that would otherwise commit the text sits in a window that never sees those keys.
     pub(super) fn activate_ime(&mut self) {
-        if self.ime_active {
+        if self.ime_active || !self.base().has_focus() {
             return;
         }
 
@@ -144,8 +151,24 @@ impl CefTexture {
 
         self.ime_active = false;
 
-        // Return focus to CefTexture
-        self.base_mut().grab_focus();
+        // Return focus to CefTexture, unless another control has taken it. This runs (deferred)
+        // after the proxy loses focus, which is what a click on a button does: grabbing focus back
+        // from that button cancels its press, so the click does nothing.
+        let taken_elsewhere = self
+            .base()
+            .get_viewport()
+            .and_then(|viewport| viewport.gui_get_focus_owner())
+            .is_some_and(|owner| {
+                let mine = self.base().clone().upcast::<Control>();
+                let proxy = self
+                    .ime_proxy
+                    .as_ref()
+                    .map(|p| p.clone().upcast::<Control>());
+                owner != mine && Some(owner) != proxy
+            });
+        if !taken_elsewhere {
+            self.base_mut().grab_focus();
+        }
     }
 
     pub(super) fn handle_os_ime_update(&mut self) {
