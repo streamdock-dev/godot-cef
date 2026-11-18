@@ -187,42 +187,43 @@ pub(crate) fn profile_loading() -> bool {
     })
 }
 
-/// `sanitized_id`'s profile context once its disk profile is ready, else `None` (the load is
-/// started on the first call). A disk profile loads asynchronously, and
-/// `browser_host_create_browser_sync` returns nothing for a context whose profile is not ready,
-/// so a browser waits for this rather than failing on every frame.
+/// `sanitized_id`'s profile context once its disk profile is ready, else
+/// `CefError::ProfileLoading` (the load is started on the first call). A disk profile loads
+/// asynchronously, and `browser_host_create_browser_sync` returns nothing for a context whose
+/// profile is not ready, so a browser waits for this rather than failing on every frame.
 fn ready_profile_context(
     sanitized_id: &str,
     log_prefix: &str,
 ) -> Result<cef::RequestContext, CefError> {
+    use std::collections::hash_map::Entry;
+
     PROFILE_CONTEXTS.with(|contexts| {
         let mut contexts = contexts.borrow_mut();
-        if !contexts.contains_key(sanitized_id) {
-            let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let mut handler = webrender::ProfileReadyHandlerImpl::build(
-                webrender::ProfileReadyHandler::new(ready.clone()),
-            );
-            let context = cef::request_context_create_context(
-                Some(&build_request_context_settings(sanitized_id)),
-                Some(&mut handler),
-            )
-            .ok_or_else(|| {
-                CefError::BrowserCreationFailed(format!(
-                    "request_context_create_context returned None for profile '{sanitized_id}'"
-                ))
-            })?;
-            godot::global::godot_print!("[{}] Loading profile '{}'", log_prefix, sanitized_id);
-            contexts.insert(
-                sanitized_id.to_string(),
-                ProfileContext {
+        let profile = match contexts.entry(sanitized_id.to_string()) {
+            Entry::Occupied(existing) => existing.into_mut(),
+            Entry::Vacant(slot) => {
+                let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let mut handler = webrender::ProfileReadyHandlerImpl::build(
+                    webrender::ProfileReadyHandler::new(ready.clone()),
+                );
+                let context = cef::request_context_create_context(
+                    Some(&build_request_context_settings(sanitized_id)),
+                    Some(&mut handler),
+                )
+                .ok_or_else(|| {
+                    CefError::BrowserCreationFailed(format!(
+                        "request_context_create_context returned None for profile '{sanitized_id}'"
+                    ))
+                })?;
+                godot::global::godot_print!("[{}] Loading profile '{}'", log_prefix, sanitized_id);
+                slot.insert(ProfileContext {
                     context,
                     ready,
                     started: std::time::Instant::now(),
                     logged_ready: false,
-                },
-            );
-        }
-        let profile = contexts.get_mut(sanitized_id).expect("inserted above");
+                })
+            }
+        };
         if !profile.ready.load(Ordering::Acquire) {
             return Err(CefError::ProfileLoading(sanitized_id.to_string()));
         }
@@ -258,11 +259,17 @@ fn create_request_context(
     match sanitize_browser_context_id(browser_context_id) {
         Some(sanitized) => {
             let mut base = ready_profile_context(&sanitized, log_prefix)?;
-            Ok(cef::request_context_cef_create_context_shared(Some(&mut base), Some(handler)))
+            Ok(cef::request_context_cef_create_context_shared(
+                Some(&mut base),
+                Some(handler),
+            ))
         }
         None => {
             let mut global = cef::request_context_get_global_context();
-            Ok(cef::request_context_cef_create_context_shared(global.as_mut(), Some(handler)))
+            Ok(cef::request_context_cef_create_context_shared(
+                global.as_mut(),
+                Some(handler),
+            ))
         }
     }
 }

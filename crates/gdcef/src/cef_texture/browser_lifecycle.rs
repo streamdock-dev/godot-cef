@@ -49,7 +49,9 @@ impl CefTexture {
         match self.try_create_browser() {
             // Retried on a later frame (`on_process`) once the profile is ready.
             Ok(()) | Err(CefError::ProfileLoading(_)) => {}
-            Err(e) => godot::global::godot_error!("[CefTexture] {}", e),
+            Err(e) => {
+                godot::global::godot_error!("[CefTexture] {}", e);
+            }
         }
     }
 
