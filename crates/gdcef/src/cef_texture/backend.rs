@@ -158,6 +158,29 @@ fn build_request_context_settings(sanitized_id: &str) -> RequestContextSettings 
     }
 }
 
+thread_local! {
+    /// One context per own-profile id, for the process's lifetime (CEF is never shut down
+    /// within a process; see `cef_init::CefState::release`). Only touched on the main thread.
+    static PROFILE_CONTEXTS: std::cell::RefCell<HashMap<String, cef::RequestContext>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// The context that owns `sanitized_id`'s disk profile, created on first use.
+fn profile_context(sanitized_id: &str) -> Option<cef::RequestContext> {
+    PROFILE_CONTEXTS.with(|contexts| {
+        let mut contexts = contexts.borrow_mut();
+        if let Some(existing) = contexts.get(sanitized_id) {
+            return Some(existing.clone());
+        }
+        let created = cef::request_context_create_context(
+            Some(&build_request_context_settings(sanitized_id)),
+            None,
+        )?;
+        contexts.insert(sanitized_id.to_string(), created.clone());
+        Some(created)
+    })
+}
+
 /// The `RequestContext` a new browser runs in, carrying `handler` either way.
 ///
 /// A non-empty `browser_context_id` gets its own profile (`build_request_context_settings`).
@@ -166,15 +189,24 @@ fn build_request_context_settings(sanitized_id: &str) -> RequestContextSettings 
 /// instead -- not the shared profile this was documented as -- so its cookies and logins were
 /// lost on restart, and Chrome extensions loaded with `--load-extension` (which load into the
 /// global profile, and are off in incognito) never reached its pages.
+///
+/// A disk profile is created asynchronously by the Chrome runtime, and
+/// `browser_host_create_browser_sync` returns nothing for a context whose profile is not ready
+/// yet. Creating a fresh context on every attempt meant it never was (each retry started the
+/// profile over), so every browser with its own profile failed to open once those profiles
+/// became real disk profiles. Each id's profile context is now created once
+/// (`profile_context`), and a browser gets a context shared from it carrying its own handler --
+/// as the global profile already did. The first attempts fail while the profile loads; the
+/// CefTexture retries and a later frame's attempt opens.
 fn create_request_context(
     browser_context_id: &str,
     handler: &mut cef::RequestContextHandler,
 ) -> Option<cef::RequestContext> {
     match sanitize_browser_context_id(browser_context_id) {
-        Some(sanitized) => cef::request_context_create_context(
-            Some(&build_request_context_settings(&sanitized)),
-            Some(handler),
-        ),
+        Some(sanitized) => {
+            let mut base = profile_context(&sanitized)?;
+            cef::request_context_cef_create_context_shared(Some(&mut base), Some(handler))
+        }
         None => {
             let mut global = cef::request_context_get_global_context();
             cef::request_context_cef_create_context_shared(global.as_mut(), Some(handler))
