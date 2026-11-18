@@ -158,26 +158,111 @@ fn build_request_context_settings(sanitized_id: &str) -> RequestContextSettings 
     }
 }
 
-/// The `RequestContext` a new browser runs in, carrying `handler` either way.
+/// One own-profile request context: kept for the process's lifetime (CEF is never shut down
+/// within a process, see `cef_init::CefState::release`), with the flag its
+/// `on_request_context_initialized` sets once the Chrome runtime has loaded the disk profile.
+struct ProfileContext {
+    context: cef::RequestContext,
+    ready: Arc<std::sync::atomic::AtomicBool>,
+    started: std::time::Instant,
+    logged_ready: bool,
+}
+
+thread_local! {
+    /// Own-profile contexts by sanitized id. Only touched on the main (CEF UI) thread.
+    static PROFILE_CONTEXTS: std::cell::RefCell<HashMap<String, ProfileContext>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// Whether any own profile is still loading. CEF's message loop is pumped by a CefTexture only
+/// once its browser exists, so while the only browsers waiting are ones whose profile is
+/// loading, nothing would pump it and the load (which finishes on the UI thread) would never
+/// complete. `CefTexture`/`CefTexture2D` also pump while this is true.
+pub(crate) fn profile_loading() -> bool {
+    PROFILE_CONTEXTS.with(|contexts| {
+        contexts
+            .borrow()
+            .values()
+            .any(|p| !p.ready.load(Ordering::Acquire))
+    })
+}
+
+/// `sanitized_id`'s profile context once its disk profile is ready, else `None` (the load is
+/// started on the first call). A disk profile loads asynchronously, and
+/// `browser_host_create_browser_sync` returns nothing for a context whose profile is not ready,
+/// so a browser waits for this rather than failing on every frame.
+fn ready_profile_context(
+    sanitized_id: &str,
+    log_prefix: &str,
+) -> Result<cef::RequestContext, CefError> {
+    PROFILE_CONTEXTS.with(|contexts| {
+        let mut contexts = contexts.borrow_mut();
+        if !contexts.contains_key(sanitized_id) {
+            let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let mut handler = webrender::ProfileReadyHandlerImpl::build(
+                webrender::ProfileReadyHandler::new(ready.clone()),
+            );
+            let context = cef::request_context_create_context(
+                Some(&build_request_context_settings(sanitized_id)),
+                Some(&mut handler),
+            )
+            .ok_or_else(|| {
+                CefError::BrowserCreationFailed(format!(
+                    "request_context_create_context returned None for profile '{sanitized_id}'"
+                ))
+            })?;
+            godot::global::godot_print!("[{}] Loading profile '{}'", log_prefix, sanitized_id);
+            contexts.insert(
+                sanitized_id.to_string(),
+                ProfileContext {
+                    context,
+                    ready,
+                    started: std::time::Instant::now(),
+                    logged_ready: false,
+                },
+            );
+        }
+        let profile = contexts.get_mut(sanitized_id).expect("inserted above");
+        if !profile.ready.load(Ordering::Acquire) {
+            return Err(CefError::ProfileLoading(sanitized_id.to_string()));
+        }
+        if !profile.logged_ready {
+            profile.logged_ready = true;
+            godot::global::godot_print!(
+                "[{}] Profile '{}' ready after {} ms",
+                log_prefix,
+                sanitized_id,
+                profile.started.elapsed().as_millis()
+            );
+        }
+        Ok(profile.context.clone())
+    })
+}
+
+/// The `RequestContext` a new browser runs in, carrying `handler` either way, or
+/// `CefError::ProfileLoading` while its own profile is not ready yet.
 ///
-/// A non-empty `browser_context_id` gets its own profile (`build_request_context_settings`).
-/// An empty one shares the global profile's storage. It used to be created with default
-/// settings, whose empty `cache_path` makes CEF create an in-memory, incognito context
-/// instead -- not the shared profile this was documented as -- so its cookies and logins were
-/// lost on restart, and Chrome extensions loaded with `--load-extension` (which load into the
-/// global profile, and are off in incognito) never reached its pages.
+/// A non-empty `browser_context_id` gets its own profile (`ready_profile_context`), and the
+/// browser a context shared from it -- one context per profile, kept alive, because creating a
+/// fresh one per attempt threw the half-loaded profile away each time. An empty one shares the
+/// global profile's storage. It used to be created with default settings, whose empty
+/// `cache_path` makes CEF create an in-memory, incognito context instead -- not the shared
+/// profile this was documented as -- so its cookies and logins were lost on restart, and Chrome
+/// extensions loaded with `--load-extension` (which load into the global profile, and are off
+/// in incognito) never reached its pages.
 fn create_request_context(
     browser_context_id: &str,
     handler: &mut cef::RequestContextHandler,
-) -> Option<cef::RequestContext> {
+    log_prefix: &str,
+) -> Result<Option<cef::RequestContext>, CefError> {
     match sanitize_browser_context_id(browser_context_id) {
-        Some(sanitized) => cef::request_context_create_context(
-            Some(&build_request_context_settings(&sanitized)),
-            Some(handler),
-        ),
+        Some(sanitized) => {
+            let mut base = ready_profile_context(&sanitized, log_prefix)?;
+            Ok(cef::request_context_cef_create_context_shared(Some(&mut base), Some(handler)))
+        }
         None => {
             let mut global = cef::request_context_get_global_context();
-            cef::request_context_cef_create_context_shared(global.as_mut(), Some(handler))
+            Ok(cef::request_context_cef_create_context_shared(global.as_mut(), Some(handler)))
         }
     }
 }
@@ -508,6 +593,11 @@ pub(crate) fn try_create_browser(
         return Ok(());
     }
 
+    // Wait for an own profile before allocating anything for the browser.
+    if let Some(sanitized) = sanitize_browser_context_id(&params.browser_context_id) {
+        ready_profile_context(&sanitized, params.log_prefix)?;
+    }
+
     if params.logical_size.x <= 0.0 || params.logical_size.y <= 0.0 {
         return Err(CefError::InvalidSize {
             width: params.logical_size.x,
@@ -556,7 +646,8 @@ pub(crate) fn try_create_browser(
         &mut webrender::RequestContextHandlerImpl::build(webrender::OsrRequestContextHandler::new(
             adblock_engine,
         )),
-    );
+        params.log_prefix,
+    )?;
     if let Some(ctx) = context.as_mut() {
         godot_protocol::register_res_scheme_handler_on_context(ctx);
         godot_protocol::register_user_scheme_handler_on_context(ctx);

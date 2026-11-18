@@ -1659,6 +1659,38 @@ impl_build_new!(
     handler: OsrRequestContextHandler
 );
 
+/// The handler of an own profile's base request context: it only records when the Chrome
+/// runtime has finished loading the disk profile (see `cef_texture::backend`'s
+/// `ready_profile_context`). Browsers get contexts shared from that base carrying
+/// `RequestContextHandlerImpl`, so resource requests never reach this one.
+#[derive(Clone)]
+pub struct ProfileReadyHandler {
+    ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ProfileReadyHandler {
+    pub fn new(ready: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+        Self { ready }
+    }
+}
+
+wrap_request_context_handler! {
+    pub(crate) struct ProfileReadyHandlerImpl {
+        handler: ProfileReadyHandler,
+    }
+
+    impl RequestContextHandler {
+        fn on_request_context_initialized(&self, _request_context: Option<&mut RequestContext>) {
+            self.handler.ready.store(true, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
+impl_build_new!(
+    pub(crate) ProfileReadyHandlerImpl => cef::RequestContextHandler;
+    handler: ProfileReadyHandler
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

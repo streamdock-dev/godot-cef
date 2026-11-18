@@ -30,6 +30,8 @@ pub enum CefError {
     GpuDeviceError(String),
     /// Invalid texture size (zero or negative dimensions).
     InvalidSize { width: f32, height: f32 },
+    /// A browser's own profile (by sanitized id) is still loading; creation is retried.
+    ProfileLoading(String),
 }
 
 impl fmt::Display for CefError {
@@ -59,6 +61,9 @@ impl fmt::Display for CefError {
             CefError::InvalidSize { width, height } => {
                 write!(f, "Invalid texture size: {}x{}", width, height)
             }
+            CefError::ProfileLoading(id) => {
+                write!(f, "Profile '{}' is still loading", id)
+            }
         }
     }
 }
@@ -73,7 +78,8 @@ impl std::error::Error for CefError {
             | CefError::TextureOperationFailed(_)
             | CefError::ResourceNotFound(_)
             | CefError::GpuDeviceError(_)
-            | CefError::InvalidSize { .. } => None,
+            | CefError::InvalidSize { .. }
+            | CefError::ProfileLoading(_) => None,
         }
     }
 }

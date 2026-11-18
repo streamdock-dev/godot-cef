@@ -97,7 +97,10 @@ impl CefTextureRuntime {
             log_prefix,
         };
         if let Err(e) = backend::try_create_browser(&mut self.app, &params) {
-            godot::global::godot_error!("[{}] {}", log_prefix, e);
+            // A profile still loading is retried on a later frame, not an error.
+            if !matches!(e, crate::error::CefError::ProfileLoading(_)) {
+                godot::global::godot_error!("[{}] {}", log_prefix, e);
+            }
             self.app.release_cef_if_retained();
             return;
         }
@@ -131,7 +134,8 @@ impl CefTextureRuntime {
     }
 
     pub(crate) fn message_loop_and_begin_frame(&self) {
-        if self.app.state.is_some() {
+        // Also while an own profile loads; see `CefTexture::on_process`.
+        if self.app.state.is_some() || backend::profile_loading() {
             cef::do_message_loop_work();
         }
         backend::request_external_begin_frame(&self.app);

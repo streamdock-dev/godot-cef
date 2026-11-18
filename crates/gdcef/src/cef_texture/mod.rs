@@ -360,7 +360,9 @@ impl CefTexture {
         _ = self.handle_size_change();
         self.update_texture();
 
-        if self.with_app(|app| app.state.is_some()) {
+        // Also pump while an own profile loads: it finishes on CEF's UI thread, and when the only
+        // browsers are ones waiting for their profile, nothing else would pump it.
+        if self.with_app(|app| app.state.is_some()) || backend::profile_loading() {
             // Chromium can show a real window from inside the pump (an extension's welcome tab,
             // say). On Windows ShowWindow calls straight back into Godot's window procedure on
             // this stack, and Godot then notifies the whole tree, this node included. The guard
