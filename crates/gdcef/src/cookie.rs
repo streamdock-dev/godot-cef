@@ -196,6 +196,28 @@ impl FlushCookieStoreCallbackImpl {
     }
 }
 
+// ── Flush-before-close callback ─────────────────────────────────────────────
+
+// Records that a cookie-store flush finished, for `backend::flush_cookies_before_close`, which
+// waits on it instead of on the event queue (the browser is being torn down).
+wrap_completion_callback! {
+    pub(crate) struct FlushDoneCallbackImpl {
+        done: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl CompletionCallback {
+        fn on_complete(&self) {
+            self.done.store(true, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
+impl FlushDoneCallbackImpl {
+    pub fn build(done: Arc<std::sync::atomic::AtomicBool>) -> CompletionCallback {
+        Self::new(done)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

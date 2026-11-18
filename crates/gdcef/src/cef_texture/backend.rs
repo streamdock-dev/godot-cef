@@ -700,6 +700,46 @@ pub(crate) fn try_create_browser(
     Ok(())
 }
 
+/// The longest a closing browser waits for its cookies to reach disk.
+const COOKIE_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Writes `state`'s cookies to disk and pumps CEF until that is done (or
+/// `COOKIE_FLUSH_TIMEOUT`). Chromium persists cookies on a timer of about 30 s, and CEF is never
+/// shut down within a process (`cef_init::CefState::release`), so without this a cookie set in
+/// the last ~30 s before the app quits -- a sign-in, say -- was lost. Quitting frees every
+/// CefTexture, so this runs for each browser on the way out. localStorage is unaffected: it is
+/// written as it changes.
+fn flush_cookies_before_close(state: &BrowserState, log_prefix: &str) {
+    use cef::{ImplBrowserHost, ImplCookieManager, ImplRequestContext};
+
+    let Some(manager) = state
+        .browser
+        .host()
+        .and_then(|host| host.request_context())
+        .and_then(|ctx| ctx.cookie_manager(None))
+    else {
+        return;
+    };
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut callback = crate::cookie::FlushDoneCallbackImpl::build(done.clone());
+    if manager.flush_store(Some(&mut callback)) == 0 {
+        return;
+    }
+    let started = std::time::Instant::now();
+    while !done.load(Ordering::Acquire) {
+        if started.elapsed() >= COOKIE_FLUSH_TIMEOUT {
+            godot::global::godot_warn!(
+                "[{}] Cookies not confirmed written after {} ms; closing anyway",
+                log_prefix,
+                COOKIE_FLUSH_TIMEOUT.as_millis()
+            );
+            return;
+        }
+        cef::do_message_loop_work();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
 pub(crate) fn cleanup_runtime(app: &mut App, popup_texture_2d_rd: Option<&mut Gd<Texture2Drd>>) {
     if app.state.is_none() {
         app.mark_browser_closed();
@@ -707,6 +747,11 @@ pub(crate) fn cleanup_runtime(app: &mut App, popup_texture_2d_rd: Option<&mut Gd
         return;
     }
     app.mark_browser_closing();
+
+    // First, while the browser and its textures are all still intact.
+    if let Some(state) = &app.state {
+        flush_cookies_before_close(state, "CefTexture");
+    }
 
     if let Some(state) = &app.state
         && let Ok(mut pending) = state.pending_permission_requests.lock()
