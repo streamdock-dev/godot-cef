@@ -134,13 +134,22 @@ fn sanitize_browser_context_id(id: &str) -> Option<String> {
     }
 }
 
-/// The `RequestContextSettings` for a browser with its own profile: a `cache_path`
-/// subdirectory under the configured data path, giving it independent
-/// cookie/cache/local-storage storage.
+/// Where a browser with its own profile keeps it: a **direct** child of `data_path`, which is
+/// CEF's `root_cache_path`. The Chrome runtime accepts a request context's `cache_path` only
+/// when it is the root itself or one level below it (`chrome_browser_context.cc`); anything
+/// deeper logs "Cannot create profile at path" and silently gets a fresh incognito profile, so
+/// its logins and cookies were lost on every restart. That is what the old
+/// `contexts/<id>` layout did. The prefix keeps these clear of Chromium's own profile
+/// directories (`Default`, `System Profile`, `Guest Profile`).
+fn context_cache_dir(data_path: &std::path::Path, sanitized_id: &str) -> std::path::PathBuf {
+    data_path.join(format!("context-{sanitized_id}"))
+}
+
+/// The `RequestContextSettings` for a browser with its own profile: a `cache_path` under the
+/// configured data path (`context_cache_dir`), giving it independent cookie/cache/local-storage
+/// storage that persists.
 fn build_request_context_settings(sanitized_id: &str) -> RequestContextSettings {
-    let cache_dir = crate::settings::get_data_path()
-        .join("contexts")
-        .join(sanitized_id);
+    let cache_dir = context_cache_dir(&crate::settings::get_data_path(), sanitized_id);
     let cache_path: CefStringUtf16 = cache_dir.to_string_lossy().as_ref().into();
 
     RequestContextSettings {
@@ -900,7 +909,7 @@ fn create_accelerated_browser(
 
 #[cfg(test)]
 mod tests {
-    use super::{color_to_cef_color, sanitize_browser_context_id};
+    use super::{color_to_cef_color, context_cache_dir, sanitize_browser_context_id};
     use godot::prelude::Color;
 
     #[test]
@@ -968,5 +977,18 @@ mod tests {
         let long_id = "a".repeat(129);
         let sanitized = sanitize_browser_context_id(&long_id).unwrap();
         assert!(sanitized.starts_with("ctx-"));
+    }
+
+    /// CEF refuses a profile that is not directly under root_cache_path and falls back to
+    /// incognito without failing anything visible, so this is the only place it shows.
+    #[test]
+    fn a_context_profile_is_a_direct_child_of_the_root_cache_path() {
+        let root = std::path::Path::new("/data/cef-data");
+        let dir = context_cache_dir(root, "261ec7e3c06c440d8c5e803aaf7c394e");
+        assert_eq!(dir.parent(), Some(root));
+        assert_eq!(
+            dir.file_name().and_then(|n| n.to_str()),
+            Some("context-261ec7e3c06c440d8c5e803aaf7c394e")
+        );
     }
 }
