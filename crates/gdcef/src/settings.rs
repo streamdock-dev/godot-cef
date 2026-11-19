@@ -239,7 +239,20 @@ pub fn get_data_path() -> PathBuf {
 
     let absolute_path = settings.globalize_path(&path_gstring).to_string();
 
-    PathBuf::from(absolute_path)
+    PathBuf::from(native_separators(absolute_path))
+}
+
+/// `path` with the platform's own separators. Godot's `globalize_path` writes `/` on Windows
+/// too, and CEF keeps `root_cache_path` with `\`, while the Chrome runtime accepts a request
+/// context's `cache_path` only when its parent *equals* that root. A `C:/.../cef-data\context-<id>`
+/// path compared unequal, logged "Cannot create profile at path" and got a fresh incognito
+/// profile, so on Windows every own profile (each Browser Dock) lost its cookies on quit.
+pub(crate) fn native_separators(path: String) -> String {
+    if cfg!(windows) {
+        path.replace('/', "\\")
+    } else {
+        path
+    }
 }
 
 pub fn get_security_config() -> SecurityConfig {

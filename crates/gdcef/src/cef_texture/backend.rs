@@ -1053,6 +1053,7 @@ fn create_accelerated_browser(
 #[cfg(test)]
 mod tests {
     use super::{color_to_cef_color, context_cache_dir, sanitize_browser_context_id};
+    use crate::settings::native_separators;
     use godot::prelude::Color;
 
     #[test]
@@ -1074,6 +1075,26 @@ mod tests {
             color_to_cef_color(color),
             u32::from_be_bytes([255, 0, 255, 63])
         );
+    }
+
+    /// The Chrome runtime compares a profile's parent with `root_cache_path` as strings, so on
+    /// Windows the two must not mix `/` (what Godot's `globalize_path` writes) with `\`.
+    #[test]
+    #[cfg(windows)]
+    fn context_cache_dir_parent_is_the_data_path_verbatim_on_windows() {
+        let data_path =
+            native_separators("C:/Users/me/AppData/Roaming/Godot/app_userdata/App/cef-data".into());
+        assert_eq!(
+            data_path,
+            r"C:\Users\me\AppData\Roaming\Godot\app_userdata\App\cef-data"
+        );
+
+        let dir = context_cache_dir(std::path::Path::new(&data_path), "dock-1");
+        assert_eq!(
+            dir.to_string_lossy(),
+            r"C:\Users\me\AppData\Roaming\Godot\app_userdata\App\cef-data\context-dock-1"
+        );
+        assert!(!dir.to_string_lossy().contains('/'));
     }
 
     #[test]
