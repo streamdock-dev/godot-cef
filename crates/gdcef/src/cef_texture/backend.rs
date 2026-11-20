@@ -174,10 +174,11 @@ thread_local! {
         std::cell::RefCell::new(HashMap::new());
 }
 
-/// Whether any own profile is still loading. CEF's message loop is pumped by a CefTexture only
-/// once its browser exists, so while the only browsers waiting are ones whose profile is
-/// loading, nothing would pump it and the load (which finishes on the UI thread) would never
-/// complete. `CefTexture`/`CefTexture2D` also pump while this is true.
+/// Whether any own profile is still loading. Only matters when CEF is not pumped for the whole
+/// process (`cef_init::message_pump_installed`): a CefTexture then pumps only once its browser
+/// exists, so while the only browsers waiting are ones whose profile is loading, nothing would
+/// pump it and the load (which finishes on the UI thread) would never complete.
+/// `CefTexture`/`CefTexture2D` also pump while this is true.
 pub(crate) fn profile_loading() -> bool {
     PROFILE_CONTEXTS.with(|contexts| {
         contexts

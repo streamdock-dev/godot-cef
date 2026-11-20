@@ -135,7 +135,9 @@ impl CefTextureRuntime {
 
     pub(crate) fn message_loop_and_begin_frame(&self) {
         // Also while an own profile loads; see `CefTexture::on_process`.
-        if self.app.state.is_some() || backend::profile_loading() {
+        if !crate::cef_init::message_pump_installed()
+            && (self.app.state.is_some() || backend::profile_loading())
+        {
             cef::do_message_loop_work();
         }
         backend::request_external_begin_frame(&self.app);

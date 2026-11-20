@@ -1,6 +1,7 @@
 use cef::Settings;
 use godot::classes::{Engine, Os};
 use godot::prelude::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 #[cfg(target_os = "macos")]
@@ -67,6 +68,7 @@ pub fn cef_retain() -> CefResult<()> {
         initialize_cef()?;
         state.mark_initialized();
         pin_cef_modules();
+        install_message_pump();
 
         settings::warn_if_insecure_settings();
         settings::log_production_security_baseline();
@@ -273,6 +275,49 @@ fn initialize_cef() -> CefResult<()> {
     }
 
     Ok(())
+}
+
+/// Set once `install_message_pump` has hooked CEF's message loop to every frame.
+static MESSAGE_PUMP_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+/// Whether CEF's message loop is already pumped once per frame for the whole process. While it
+/// is, a CefTexture or CefTexture2D leaves the pumping to it; they pump themselves only if it
+/// could not be installed.
+pub(crate) fn message_pump_installed() -> bool {
+    MESSAGE_PUMP_INSTALLED.load(Ordering::Acquire)
+}
+
+/// Pumps CEF's message loop once per frame from now until the process ends, whether or not any
+/// browser exists.
+///
+/// With `external_message_pump`, nothing services CEF's UI thread unless this extension pumps
+/// it, and each CefTexture used to pump only while its own browser existed. CEF starts its
+/// helper processes (the network service among them) when it initializes, so in the gap between
+/// the first browser going away and the next being created -- an app starting CEF at launch and
+/// opening a browser minutes later -- the browser process never answered them. A Chromium child
+/// that gets no connection within 15 s ends itself, and the next browser then met "Network
+/// service crashed or was terminated, restarting service" and could lose its first navigation.
+///
+/// The pump runs from SceneTree's `process_frame`, before any node's `_process`, and not inside
+/// a node's call: Chromium can show a real window from inside the pump, which on Windows calls
+/// straight back into Godot's window procedure, and with no node borrowed that re-entry is legal.
+fn install_message_pump() {
+    use godot::classes::{Engine, SceneTree};
+
+    let Some(mut tree) = Engine::singleton()
+        .get_main_loop()
+        .and_then(|main_loop| main_loop.try_cast::<SceneTree>().ok())
+    else {
+        godot::global::godot_warn!(
+            "[CefInit] No SceneTree to pump CEF from; browsers will pump it themselves"
+        );
+        return;
+    };
+    let pump = Callable::from_fn("cef_message_pump", |_args| {
+        cef::do_message_loop_work();
+    });
+    tree.connect("process_frame", &pump);
+    MESSAGE_PUMP_INSTALLED.store(true, Ordering::Release);
 }
 
 /// Keeps libcef.dll and this extension's own DLL loaded until the process ends.
