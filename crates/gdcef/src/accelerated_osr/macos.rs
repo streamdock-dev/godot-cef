@@ -413,7 +413,21 @@ fn io_registry_search_property_u32(service: u32, key: &str) -> Option<u32> {
 
 /// Get the GPU vendor and device IDs from Godot's Metal device.
 pub fn get_godot_gpu_device_ids() -> Option<(u32, u32)> {
-    let rd = RenderingServer::singleton().get_rendering_device()?;
+    // Only Metal hands back an MTLDevice here. Under Vulkan (MoltenVK, which every Intel Mac
+    // runs) LOGICAL_DEVICE is a VkDevice, and sending it `registryID` segfaults inside CEF
+    // startup -- which Godot's crash handler then surfaces as a CefTexture "already bound"
+    // panic from the first CefTexture's READY. The IDs only steer accelerated OSR, which is
+    // Metal-only on macOS, so there is nothing to look up otherwise.
+    let rs = RenderingServer::singleton();
+    if !rs
+        .get_current_rendering_driver_name()
+        .to_string()
+        .to_lowercase()
+        .contains("metal")
+    {
+        return None;
+    }
+    let rd = rs.get_rendering_device()?;
     let mtl_device_ptr = rd.get_driver_resource(DriverResource::LOGICAL_DEVICE, Rid::Invalid, 0);
 
     if mtl_device_ptr == 0 {
