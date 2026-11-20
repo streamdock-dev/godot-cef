@@ -66,6 +66,7 @@ pub fn cef_retain() -> CefResult<()> {
         cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
         initialize_cef()?;
         state.mark_initialized();
+        pin_cef_modules();
 
         settings::warn_if_insecure_settings();
         settings::log_production_security_baseline();
@@ -273,6 +274,45 @@ fn initialize_cef() -> CefResult<()> {
 
     Ok(())
 }
+
+/// Keeps libcef.dll and this extension's own DLL loaded until the process ends.
+///
+/// CEF is never shut down (see `CefState::release`), so its threads are still running when Godot
+/// quits. Godot then unloads every GDExtension before the process exits, which freed gdcef.dll
+/// and, with it, libcef.dll: the still-running CEF threads executed code that was no longer
+/// there and the app died with an access violation on quit. A pinned module is never unloaded,
+/// so those threads run on until the process ends them. gdcef.dll is pinned too, because CEF's
+/// threads call back into the handlers it implements.
+#[cfg(target_os = "windows")]
+fn pin_cef_modules() {
+    use windows::Win32::Foundation::HMODULE;
+    use windows::Win32::System::LibraryLoader::{
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
+    };
+    use windows::core::{PCWSTR, w};
+
+    let mut module = HMODULE::default();
+    // SAFETY: both calls only look up a module already loaded in this process; the address is
+    // a function inside this DLL.
+    let ours = unsafe {
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+            PCWSTR(pin_cef_modules as *const () as *const u16),
+            &mut module,
+        )
+    };
+    let cef =
+        unsafe { GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN, w!("libcef.dll"), &mut module) };
+    if let Err(e) = ours.and(cef) {
+        godot::global::godot_warn!(
+            "[CefInit] Could not keep CEF loaded until exit; quitting may crash: {}",
+            e
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn pin_cef_modules() {}
 
 #[cfg(test)]
 mod tests {
